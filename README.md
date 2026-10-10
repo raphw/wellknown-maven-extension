@@ -11,10 +11,21 @@ and, where that file names a location for the artifact, downloads it from there.
 [Jenesis](https://github.com/jenesis/jenesis) reads with `-Djenesis.repository.discovery=true`, read by the same
 rules, so a domain that publishes it serves Jenesis and Maven alike.
 
-Using it
---------
+Quickstart
+----------
 
-Declare the extension in `.mvn/extensions.xml` at the root of a project:
+**Requirements.** Maven 3.9 or newer, running on JDK 17 or newer. The extension is compiled for Java 17, so a
+Maven that runs on Java 8 or 11 cannot load it, whatever release your project compiles for. It has been verified
+on Maven 3.9.11 and 4.0.0-rc-7.
+
+**1. Make the extension available.** No release is published yet, so build and install it into your local
+repository once:
+
+    git clone https://github.com/raphw/wellknown-maven-extension.git
+    cd wellknown-maven-extension
+    mvn install
+
+**2. Declare it in your project.** Create `.mvn/extensions.xml` beside the root `pom.xml`:
 
     <extensions>
         <extension>
@@ -24,10 +35,25 @@ Declare the extension in `.mvn/extensions.xml` at the root of a project:
         </extension>
     </extensions>
 
-Nothing else changes. Every dependency, plugin, parent POM and version range is resolved as before, except
-that a group whose domain publishes a location is asked there first. A group whose domain publishes nothing
-resolves exactly as it would without the extension. `demo/` is a project that names no Maven repository at all
-and still resolves `build.jenesis` from the GitHub releases `jenesis.build` names; its README shows the output.
+It has to be this file: a core extension is loaded before the first POM is read, which is what lets it serve
+parent POMs and plugins as well. Declaring it in a POM's `<build><extensions>` does not work.
+
+**3. Build as usual.** `mvn verify` or any other goal. Every dependency, plugin, parent POM and version range is
+resolved as before, except that a group whose domain publishes a location is asked there first. A group whose
+domain publishes nothing resolves exactly as it would without the extension.
+
+**4. See it work.** A file a domain served is reported under the domain's name instead of a repository's:
+
+    [INFO] Downloading from jenesis.build: https://github.com/jenesis/jenesis/releases/download/v0.15.5/build.jenesis-0.15.5.jar
+
+Only downloads are discovered, so an artifact already in your local repository is not fetched again; delete it
+there, or run with `-U`, to watch it come through the domain. `-X` adds a debug line for every domain asked,
+saying whether it published a file and how long it took. `demo/` is a complete project that names no Maven
+repository holding its dependencies and still resolves them; its README walks through it.
+
+**Switching it off.** `-Dwellknown.discovery=false` leaves every request to the declared repositories for one
+build, as if the extension were not installed; put it in `.mvn/maven.config` to switch it off for every build of
+the project without removing the declaration. Offline builds (`-o`) never ask a domain.
 
 The file
 --------
@@ -69,6 +95,44 @@ The rules, all of them as Jenesis applies them:
     each fail the download with the file named. An unknown key, such as Jenesis' `module`, `moduletomaven` and
     `sources`, is ignored. A file that cannot be fetched counts as absent, save where the domain's certificate
     does not verify.
+
+Publishing a file for your own group
+------------------------------------
+
+To let Maven and Jenesis users resolve your artifacts from where you publish them, without a Maven repository of
+their own declaring it:
+
+**1. Pick the domain.** A groupId names a domain read backwards, and the shortest one that publishes a file
+answers: for `com.example.tools`, `example.com` is asked first and `tools.example.com` only where `example.com`
+publishes none. Publish at the domain you control that your groupIds reverse to, usually the apex. If several
+teams own subdomains, publish `delegate=true` at the apex and let each subdomain publish its own file.
+
+**2. Write the file.** Where your artifacts already sit in a Maven repository, a root is all it takes:
+
+    maven=https://maven.example.com/releases/
+
+Where they are attached to GitHub releases, a template names each file, and a link to the newest release lets
+version ranges and `RELEASE` find it:
+
+    maven[example-tools]=https://github.com/example/tools/releases/download/v{version}/{artifactId}-{version}{-classifier}.{type}
+    maven[example-tools].latest=https://github.com/example/tools/releases/latest/download/{artifactId}.pom
+    maven[example-tools].suffixes=none
+
+With a template, upload each file under exactly the name it expands to: `example-tools-1.2.0.jar`,
+`example-tools-1.2.0.pom`, `example-tools-1.2.0-sources.jar` and so on. Attach the POM, or Maven warns that the
+POM is missing and resolves the jar without its dependencies. Attach a `.sha256` or `.sha512` beside each file
+and every download is checked against it. The `.latest` link downloads nothing: GitHub redirects
+`releases/latest/download/<name>` to the newest release whatever `<name>` is, and the version is read from where it
+redirects. `suffixes=none` keeps snapshots and other qualified versions away from a location that holds only releases.
+
+**3. Serve it** at `https://<domain>/.well-known/java-repository.properties` over `https` with a certificate that
+verifies, as a plain UTF-8 file. GitHub Pages skips folders starting with a dot unless the site has a `.nojekyll`
+file or `include: [".well-known"]` in its `_config.yml`.
+
+**4. Check it.** `curl https://example.com/.well-known/java-repository.properties` should print the file. Then
+resolve one of your artifacts from a project like `demo/`, which replaces `central` with an empty folder so that
+only your domain can answer, with `-U` so that an answer cached earlier is not reused. A mistake in the file, such
+as a key without a value or an unknown placeholder, fails that build with the file and the key named.
 
 How it hooks into Maven
 -----------------------
